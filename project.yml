@@ -9,7 +9,7 @@ settings:
   base:
     SWIFT_VERSION: '5.0'
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: 0.1.0
+    MARKETING_VERSION: 0.2.0
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
 targets:
@@ -25,6 +25,8 @@ targets:
       path: Generated/App-Info.plist
       properties:
         CFBundleDisplayName: 筋トレ検証
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
@@ -47,6 +49,8 @@ targets:
       path: Generated/Widget-Info.plist
       properties:
         CFBundleDisplayName: 筋トレ進行
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 schemes:
