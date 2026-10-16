@@ -34,9 +34,11 @@
 ## Codemagic
 
 - `compile-probe`：署名なしでアプリと拡張をコンパイル（Xcode 26.6、xcodegenはbrewで導入）。
-- `signed-probe`：Bundle ID `com.kaitooofficial.workoutprobe`／拡張 `com.kaitooofficial.workoutprobe.activity`。
-  既存の `pocket-base-asc` 連携と `ios_signing`（既存配布証明書の秘密鍵）を参照し、プロファイルを取得・作成して App Store Connect へアップロードのみ。
-  外部テスト審査・App Store審査には出さない。既存証明書の削除・失効はしない。
+- `setup-signing`（一度だけ実行済み）：App Store Connect API（既存の `pocket-base-asc` キー）で
+  Bundle ID `com.kaitooofficial.workoutprobe`／拡張 `com.kaitooofficial.workoutprobe.activity` を登録し、App Store用プロファイルを作成。作成のみで削除・失効はしない。
+- 署名：Codemagic の Code signing identities に、新規作成した配布証明書 `workout-probe-distribution` と
+  プロファイル `workout-probe-appstore`／`workout-probe-activity-appstore` を保管（Pocket Base の `ios_signing` グループはアプリ単位で共有不可のため使わない）。
+- `signed-probe`：上記で署名し App Store Connect へアップロードのみ。外部テスト審査・App Store審査には出さない。
 - App Store Connect に上記IDで検証用アプリを事前登録する必要がある（APIでは作れない）。
 
 ## 合格判定（実機 iPhone 15 Pro / iOS 26.6.2）
