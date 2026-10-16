@@ -1,3 +1,5 @@
+# XcodeGen spec. ${PROBE_BUNDLE_ID} is substituted from the environment at `xcodegen generate` time,
+# so every workflow must export it before generating.
 name: WorkoutProbe
 options:
   minimumXcodeGenVersion: 2.42.0
@@ -9,6 +11,7 @@ settings:
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 0.1.0
     TARGETED_DEVICE_FAMILY: '1'
+    CODE_SIGN_STYLE: Automatic
 targets:
   WorkoutProbe:
     type: application
@@ -24,6 +27,9 @@ targets:
         CFBundleDisplayName: 筋トレ検証
         NSSupportsLiveActivities: true
         UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # No custom encryption: skips the export-compliance question for each TestFlight build.
+        ITSAppUsesNonExemptEncryption: false
     dependencies:
       - target: ProbeActivity
   ProbeActivity:
@@ -33,7 +39,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ${PROBE_BUNDLE_ID}.activity
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: WIDGET_EXTENSION
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) WIDGET_EXTENSION
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
     info:
@@ -47,3 +53,6 @@ schemes:
     build:
       targets:
         WorkoutProbe: all
+        ProbeActivity: all
+    archive:
+      config: Release

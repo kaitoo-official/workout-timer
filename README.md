@@ -1,68 +1,63 @@
-# iPhoneタイマー検証版
+# 筋トレタイマー iPhone検証版（workout-timer / probe）
 
-本体とは別のSwiftUI実験用ソース。Windowsで作成。Xcodeコンパイル・署名・アップロード・実機動作は未確認。
-Pocket Baseの設定は参照のみで、変更していない。クラウド実行も開始していない。
+本体とは別のSwiftUI実験アプリ。目的は「画面外・無操作でどこまで進行と表示切替ができるか」をiPhone実機で判定すること。
+元の作業案（ChatGPTプロジェクト output/workout-timer/ios-probe）をコピーし、レビュー・修正したもの。Pocket Baseの設定は参照のみ。
 
-## この版で分かること
+## 前提（Apple公式資料の調査結果 2026-10-16）
 
-休憩10秒→プランク10秒→休憩10秒→腕立て15回の予定を作成。
-各境界の通知を予約し、Live Activityに現在の区間の残り時間と操作を表示する。
-一時停止とスキップで、以後の通知を組み直す。終了すると予約通知を取り消す。
+- アプリが止まっている間に、任意の時刻でLive Activityを更新する公式APIはない。
+  自動で変わるのは「タイマー表示（Text(timerInterval:)）」と「staleDate到達時のisStale」だけ。
+- 予約通知の配信はアプリを起動しない。BGTaskSchedulerは時刻を保証しない。
+- LiveActivityIntent（Live Activity上のボタン）は、アプリをバックグラウンドで起動して実行される。
+- iOS 26から `Activity.request(...start:)` でLive Activityを指定時刻に開始する予約ができる（アラート設定必須、同時数上限に数える）。
+- 確実な無操作更新はActivityKitのAPNsプッシュ（サーバー必要）。AlarmKitは区間ごとに消音・集中モードを破るアラームになり用途が合わない。
+- 不要な音声再生やHealthKitで実行を維持する方法は使わない。
 
-重要：通知配信自体はアプリを実行しない。この版は、バックグラウンドで常時実行できると仮定しない。
-予定上の区間は時刻から求め直せるが、Live Activityの種目表示が無操作で切り替わる仕組みはまだない。
-画面上の表示更新はフォアグラウンドのタイマーまたはLive Activityの操作時に行う。
-そのため画面外で通知だけ進み、Live Activityは前区間の0秒で止まる可能性がある。
-これは検証で明示的に記録すべき未達項目であり、アプリ復帰時に正しい区間になっただけでは成功にしない。
-連続自動進行と表示更新の要件を満たした製品版ではない。5秒音声もまだ含まない。
+## この版の中身
 
-## Codemagicでの最初の確認
+予定：休憩20秒 → プランク20秒 → 休憩20秒 → サイドプランク右20秒 → 左右間の休憩20秒 → サイドプランク左20秒 → 休憩20秒 → 腕立て15回（回数制）
 
-1. このフォルダーを新しい専用リポジトリのルートにする。既存アプリに上書きしない。
-2. Codemagicにそのリポジトリを追加し、最初は `compile-probe` だけ実行。
-   署名・APIキー不要。生成されたアプリは未署名なのでiPhoneには入れられない。
-3. ビルドログでアプリと拡張のコンパイル結果を確認。失敗した場合はそのログを使って修正。
+サーバーなしの2方式を切り替えて比較する。
 
-## TestFlightへ進む前の設定
+| 方式 | 仕組み | 期待と限界 |
+|---|---|---|
+| A: 1つのLA＋先読み | 1つのLive Activity。区間終了（staleDate）で、内容に入れておいた「次の区間」を表示 | アプリ無実行でも1区間分だけ切替可能な見込み。2区間目以降は止まるはず |
+| B: 区間ごと予約LA（iOS 26） | 開始時に、自動で始まる区間ごとにLive Activityを予約。終わった区間は「終了」表示 | 各区間の開始はOSが行う。同時数上限・表示の重なり・アラートの出方を確認 |
 
-- 新しいBundle IDを決める。例のIDは使用不可。既存Pocket BaseのIDは使用禁止。
-- メインIDと、その末尾に `.activity` を付けた拡張IDを用意。
-- メインIDでApp Store Connectに別アプリを登録する。
-- Codemagicで既存の `pocket-base-asc` 連携が同じチームで利用可能か確認する。
-- `ios_signing` は前回の署名用グループ参照。秘密情報をソースに書かない。
-- 新グループ `workout_probe` を作り、`PROBE_BUNDLE_ID` に新IDを設定する。
-- 署名ワークフローは必要なら証明書・プロファイルを作成する。既存証明書の削除や失効は行わない。
-- `signed-probe` は署名とApp Store Connectアップロードを行うため、設定確認後に手動実行する。
-  自動トリガーなし。外部テスト審査・App Store審査提出は行わない。
-- App Store Connectで必要な輸出コンプライアンス情報を回答し、内部テストグループに自分を追加。
-  TestFlightでインストールする。初回の署名・配信手順はクラウドのログで検証が必要。
-- Xcodeは26.6指定。利用可能なイメージが異なる場合はCodemagic公式対応表を見て意図的に変更する。
+- 各境界の5秒前に、カウントダウン音声（`App/Sounds/countdown5.wav`、Windows標準音声で作成した検証用素材）付き通知を予約。
+- 方式Aは境界ごとに「開始」通知も予約。方式BはLive Activityのアラートで知らせる。
+- 一時停止・スキップ・完了・終了のたびに、`probe.` で始まる予約／表示済み通知をすべて消してから組み直す。
+- 回数制（腕立て）は自動完了しない。完了ボタンで終了。
+- アプリ内ログ：操作・区間更新・バックグラウンド移行・「アプリ復帰時」のLive Activity状態と予約通知件数を記録。
+  **復帰時の記録はアプリが補正する前の状態**。復帰後に正しく表示されても自動切替の成功にはしない。
 
-## 実機チェック（iPhone 15 Pro / iOS 26.6.2）
+## Codemagic
 
-| 操作 | 記録する結果 |
-|---|---|
-| アプリを開いたまま30秒待つ | 10秒ごとに切替、最後は回数制で止まるか |
-| 開始後すぐYouTubeへ移動 | 10/20/30秒の通知、動画音声への影響 |
-| 開始後すぐロック | 通知時刻、ロック画面の残り時間、種目更新の有無 |
-| Dynamic Islandを長押し | 種目、停止再開、スキップの表示と反応 |
-| 途中で一時停止して20秒待つ | 以前の通知が鳴らないか、再開後にずれないか |
-| 途中でスキップ | 次の通知が古い予定と重複しないか |
-| 腕立てで20秒待つ | 回数制が勝手に完了しないか |
-| 終了後に30秒待つ | Live Activityと通知が残らないか |
+- `compile-probe`：署名なしでアプリと拡張をコンパイル（Xcode 26.6、xcodegenはbrewで導入）。
+- `signed-probe`：Bundle ID `com.kaitooofficial.workoutprobe`／拡張 `com.kaitooofficial.workoutprobe.activity`。
+  既存の `pocket-base-asc` 連携と `ios_signing`（既存配布証明書の秘密鍵）を参照し、プロファイルを取得・作成して App Store Connect へアップロードのみ。
+  外部テスト審査・App Store審査には出さない。既存証明書の削除・失効はしない。
+- App Store Connect に上記IDで検証用アプリを事前登録する必要がある（APIでは作れない）。
 
-通常のアプリ切替と、アプリスイッチャーからの強制終了は区別して結果を残す。
-消音・集中モード・通知許可・Live Activities許可の状態も記録する。
+## 合格判定（実機 iPhone 15 Pro / iOS 26.6.2）
 
-## 判断
+| | 判定 | 確認方法 |
+|---|---|---|
+| A | クラウドでアプリと拡張がコンパイル | compile-probe成功＋PlugIns内に拡張 |
+| B | TestFlightからインストール | 内部テストでインストール・起動 |
+| C | Dynamic Island・ロック画面に時間と操作 | 表示・ボタンの反応 |
+| D | YouTube再生中・ロック中に通知 | 5秒前と開始の通知時刻 |
+| E | 無操作で時間制の区間とLA表示が次々切替 | 方式A/Bそれぞれ。復帰時ログで判定 |
+| F | 一時停止・スキップ・終了後に古い通知が残らない | 操作後の通知の有無とログの予約件数 |
+| G | 回数制は勝手に完了しない | 腕立てで放置 |
+| H | 最後5秒の音声がYouTube再生中にどう鳴るか | 音量・動画音声への影響・消音時 |
 
-コンパイル成功→表示と通知の基礎を確認→無操作での区間表示更新の方式を追加調査。
-不足部分を解消してから、本体のCapacitor併用かSwiftUIかを決める。
-Live Activitiesは継続的なバックグラウンド実行権限ではない。
-不要なバックグラウンド音声やHealthKitを実行維持目的で追加しない。
-サーバー等が必要なら、コスト・構成変更を説明してから判断する。
+A〜Dだけで全要件達成とはしない。Eが方式A/Bで満たせない場合、APNsプッシュ（サーバー）案を費用付きで相談する。
 
 ## 参照
-- Apple: https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities
-- Codemagic: https://docs.codemagic.io/yaml-quick-start/building-a-native-ios-app/
-- XcodeGen: https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md
+- https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities
+- https://developer.apple.com/documentation/activitykit/activity/request(attributes:content:pushtype:style:alertconfiguration:start:)
+- https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities
+- https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications
+- https://developer.apple.com/documentation/alarmkit/scheduling-an-alarm-with-alarmkit
+- https://docs.codemagic.io/specs-macos/xcode-26-6/

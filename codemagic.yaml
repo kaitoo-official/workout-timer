@@ -1,3 +1,6 @@
+# Codemagic workflows for the iOS background probe. Both are started manually (no triggers).
+# Pocket Base settings are only referenced (shared App Store Connect integration and the
+# signing-key group); nothing here changes Pocket Base.
 workflows:
   compile-probe:
     name: Compile iOS probe (no signing or upload)
@@ -6,6 +9,7 @@ workflows:
     environment:
       xcode: 26.6
       vars:
+        # Placeholder only; this workflow never signs. xcodegen substitutes it at generate time.
         PROBE_BUNDLE_ID: com.example.workoutprobe
     scripts:
       - name: Generate project and record toolchain
@@ -20,13 +24,14 @@ workflows:
           set -euo pipefail
           xcodebuild -project WorkoutProbe.xcodeproj -scheme WorkoutProbe \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-            PROBE_BUNDLE_ID=com.example.workoutprobe CODE_SIGNING_ALLOWED=NO \
-            -derivedDataPath build build
+            CODE_SIGNING_ALLOWED=NO -derivedDataPath build build 2>&1 | tee /tmp/compile.log
+          ls build/Build/Products/Release-iphoneos/WorkoutProbe.app/PlugIns
     artifacts:
       - build/Build/Products/Release-iphoneos/*.app
+      - /tmp/compile.log
 
   signed-probe:
-    name: Signed probe (manual setup required)
+    name: Signed probe to App Store Connect (internal TestFlight only)
     instance_type: mac_mini_m2
     max_build_duration: 45
     integrations:
@@ -34,15 +39,16 @@ workflows:
     environment:
       xcode: 26.6
       groups:
+        # CERTIFICATE_PRIVATE_KEY for the existing distribution certificate (read only)
         - ios_signing
-        - workout_probe
+      vars:
+        PROBE_BUNDLE_ID: com.kaitooofficial.workoutprobe
     scripts:
-      - name: Validate separate app identifier
+      - name: Validate separate app identifier and generate project
         script: |
           set -euo pipefail
-          : "${PROBE_BUNDLE_ID:?Set a NEW app identifier in workout_probe}"
           if [[ "$PROBE_BUNDLE_ID" == com.kaitooofficial.pocketbase* || "$PROBE_BUNDLE_ID" == com.example.* ]]; then
-            echo 'Use a separate registered identifier for this probe.'; exit 1
+            echo 'Use the separate probe identifier.'; exit 1
           fi
           xcodebuild -version
           command -v xcodegen >/dev/null || brew install xcodegen
@@ -51,6 +57,7 @@ workflows:
         script: |
           set -euo pipefail
           keychain initialize
+          # --create also registers the bundle identifiers if they do not exist yet.
           app-store-connect fetch-signing-files "$PROBE_BUNDLE_ID" --type IOS_APP_STORE --create
           app-store-connect fetch-signing-files "$PROBE_BUNDLE_ID.activity" --type IOS_APP_STORE --create
           keychain add-certificates
@@ -59,11 +66,12 @@ workflows:
         script: |
           set -euo pipefail
           xcode-project build-ipa --project WorkoutProbe.xcodeproj --scheme WorkoutProbe \
-            --archive-xcargs "PROBE_BUNDLE_ID=$PROBE_BUNDLE_ID CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
+            --archive-xcargs "CURRENT_PROJECT_VERSION=$BUILD_NUMBER COMPILER_INDEX_STORE_ENABLE=NO"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
         auth: integration
+        # Upload only. No beta review / external testing / App Store submission.
         submit_to_testflight: false
