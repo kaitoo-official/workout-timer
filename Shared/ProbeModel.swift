@@ -6,6 +6,14 @@ import Foundation
 // The engine (notifications, Activity.request/update/end, storage) lives in the app target only.
 
 struct ProbeAttributes: ActivityAttributes {
+    struct Row: Codable, Hashable {
+        var title: String
+        var detail: String
+        var start: Date
+        var end: Date
+        var repetitions: Bool
+    }
+
     struct ContentState: Codable, Hashable {
         var title: String
         var detail: String          // "20秒" or "15回"
@@ -23,6 +31,9 @@ struct ProbeAttributes: ActivityAttributes {
         var nextStart: Date?
         var nextEnd: Date?
         var nextRepetitions: Bool
+        // Mode C: the current step and the automatic steps after it, each with its own interval.
+        // System-drawn timers count each row down on schedule without any update.
+        var timeline: [Row] = []
     }
     var name: String
     var mode: String                // ProbeMode.rawValue
@@ -46,29 +57,57 @@ struct ProbeStep: Hashable {
     }
 }
 
-enum ProbePlan {
-    // Seven timed steps in a row (incl. a rest between left and right), then a repetition step.
+enum ProbePlan: String, Codable, CaseIterable, Identifiable {
+    case chain      // seven timed steps in a row, then a repetition step
+    case mixed      // the real menus: rest → repetitions → rest → timed → rest → repetitions …
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .chain: return "時間制の連続"
+        case .mixed: return "回数制まじり"
+        }
+    }
+
     // 20-second steps leave room for the 5-second countdown before each boundary.
-    static let steps: [ProbeStep] = [
-        .timed("休憩", 20, rest: true),
-        .timed("プランク", 20),
-        .timed("休憩", 20, rest: true),
-        .timed("サイドプランク右", 20),
-        .timed("左右の間の休憩", 20, rest: true),
-        .timed("サイドプランク左", 20),
-        .timed("休憩", 20, rest: true),
-        .repetitions("腕立て伏せ", 15),
-    ]
+    var steps: [ProbeStep] {
+        switch self {
+        case .chain:
+            return [
+                .timed("休憩", 20, rest: true),
+                .timed("プランク", 20),
+                .timed("休憩", 20, rest: true),
+                .timed("サイドプランク右", 20),
+                .timed("左右の間の休憩", 20, rest: true),
+                .timed("サイドプランク左", 20),
+                .timed("休憩", 20, rest: true),
+                .repetitions("腕立て伏せ", 15),
+            ]
+        case .mixed:
+            return [
+                .timed("休憩", 20, rest: true),
+                .repetitions("腕立て伏せ", 10),
+                .timed("休憩", 20, rest: true),
+                .timed("プランク", 20),
+                .timed("休憩", 20, rest: true),
+                .repetitions("スクワット", 10),
+                .timed("休憩", 20, rest: true),
+                .repetitions("レッグレイズ", 10),
+            ]
+        }
+    }
 }
 
 enum ProbeMode: String, Codable, CaseIterable, Identifiable {
     case single         // one Live Activity, updated by the app, stale-date look-ahead
     case scheduled      // iOS 26: one Live Activity per step, scheduled to start at each boundary
+    case timeline       // one Live Activity listing upcoming steps, each with its own timer
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .single: return "A: 1つのLA＋先読み"
-        case .scheduled: return "B: 区間ごと予約LA"
+        case .single: return "A: 先読み"
+        case .scheduled: return "B: 区間ごと予約"
+        case .timeline: return "C: 予定表"
         }
     }
 }

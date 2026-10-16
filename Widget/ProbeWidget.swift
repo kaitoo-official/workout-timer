@@ -15,21 +15,25 @@ private struct Shown {
     let lookAhead: Bool
     let finished: Bool
     let next: String
+    let step: Int
 
     init(_ state: ProbeAttributes.ContentState, stale: Bool, mode: String) {
         if stale && mode == ProbeMode.scheduled.rawValue {
             title = state.title; detail = "終了"; interval = nil; repetitions = false
             paused = false; remaining = 0; lookAhead = false; finished = true; next = state.nextTitle
+            step = state.step
         } else if stale, let start = state.nextStart, let end = state.nextEnd {
             title = state.nextTitle; detail = state.nextDetail
             repetitions = state.nextRepetitions
             interval = repetitions ? nil : start...max(start, end)
             paused = false; remaining = 0; lookAhead = true; finished = false; next = "（アプリ更新待ち）"
+            step = state.step + 1
         } else {
             title = state.title; detail = state.detail
             repetitions = state.repetitions; paused = state.paused; remaining = state.remaining
             interval = (repetitions || paused) ? nil : state.start...state.end
             lookAhead = false; finished = false; next = state.nextTitle
+            step = state.step
         }
     }
 }
@@ -65,7 +69,7 @@ private struct ProbeDisplay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("\(state.step)/\(state.stepCount)  \(shown.title)").font(.headline)
+                Text("\(shown.step)/\(state.stepCount)  \(shown.title)").font(.headline)
                 Spacer()
                 TimeLabel(shown: shown).font(.title2.bold()).frame(maxWidth: 110, alignment: .trailing)
             }
@@ -76,6 +80,40 @@ private struct ProbeDisplay: View {
     }
 }
 
+/// Mode C: no updates needed. Each row's timer and bar run on their own schedule, so the row
+/// that is counting down is the current step even while the app is not running.
+private struct TimelineDisplay: View {
+    let state: ProbeAttributes.ContentState
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(state.timeline.enumerated()), id: \.offset) { k, row in
+                HStack(spacing: 6) {
+                    Text("\(state.step + k)").font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+                    Text(row.title).font(.subheadline.bold()).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if row.repetitions {
+                        Text(row.detail).font(.subheadline)
+                    } else {
+                        ProgressView(timerInterval: row.start...row.end, countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
+                            .tint(.orange).frame(width: 60)
+                        Text(timerInterval: row.start...row.end, countsDown: true)
+                            .monospacedDigit().font(.subheadline).frame(width: 44, alignment: .trailing)
+                    }
+                }
+            }
+            HStack {
+                Button(intent: ToggleProbeIntent()) { Text("一時停止") }
+                Button(intent: NextProbeIntent()) { Text(state.repetitions ? "完了" : "スキップ") }
+            }
+            .buttonStyle(.bordered).tint(.orange).font(.caption)
+        }
+    }
+}
+
+private extension ProbeAttributes.ContentState {
+    var usesTimeline: Bool { !timeline.isEmpty && !paused }
+}
+
 @main
 struct ProbeWidget: Widget {
     var body: some WidgetConfiguration {
@@ -83,7 +121,11 @@ struct ProbeWidget: Widget {
             let shown = Shown(context.state, stale: context.isStale, mode: context.attributes.mode)
             VStack(alignment: .leading, spacing: 4) {
                 Text("筋トレ検証 \(context.attributes.name)").font(.caption).foregroundStyle(.secondary)
-                ProbeDisplay(state: context.state, shown: shown)
+                if context.state.usesTimeline {
+                    TimelineDisplay(state: context.state)
+                } else {
+                    ProbeDisplay(state: context.state, shown: shown)
+                }
             }
             .padding()
             .activityBackgroundTint(.black)
@@ -92,7 +134,11 @@ struct ProbeWidget: Widget {
             let shown = Shown(context.state, stale: context.isStale, mode: context.attributes.mode)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) {
-                    ProbeDisplay(state: context.state, shown: shown)
+                    if context.state.usesTimeline {
+                        TimelineDisplay(state: context.state)
+                    } else {
+                        ProbeDisplay(state: context.state, shown: shown)
+                    }
                 }
             } compactLeading: {
                 Image(systemName: shown.title.contains("休憩") ? "pause.circle" : "figure.strengthtraining.traditional")

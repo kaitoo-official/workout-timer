@@ -4,6 +4,7 @@ import UserNotifications
 
 struct ProbeSession: Codable {
     var mode: ProbeMode
+    var plan: ProbePlan
     var index = 0
     var start = Date()
     var paused = false
@@ -11,12 +12,13 @@ struct ProbeSession: Codable {
     var completed = 0
     var skipped = 0
 
-    init(mode: ProbeMode) {
+    init(mode: ProbeMode, plan: ProbePlan) {
         self.mode = mode
-        remaining = ProbePlan.steps[0].seconds ?? 0
+        self.plan = plan
+        remaining = plan.steps[0].seconds ?? 0
     }
 
-    static let key = "probe.session.v2"
+    static let key = "probe.session.v3"
     static func load() -> Self? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
@@ -25,14 +27,15 @@ struct ProbeSession: Codable {
         UserDefaults.standard.set(try JSONEncoder().encode(self), forKey: Self.key)
     }
 
-    var step: ProbeStep { ProbePlan.steps[index] }
+    var steps: [ProbeStep] { plan.steps }
+    var step: ProbeStep { steps[index] }
     var end: Date { start.addingTimeInterval(remaining) }
 
     /// Advances past timed steps whose end has passed. Returns true if the step changed.
     mutating func reconcile(now: Date = Date()) -> Bool {
         guard !paused else { return false }
         var changed = false
-        while step.seconds != nil, now >= end, index + 1 < ProbePlan.steps.count {
+        while step.seconds != nil, now >= end, index + 1 < steps.count {
             let boundary = end
             if !step.rest { completed += 1 }
             index += 1
@@ -56,9 +59,9 @@ struct ProbeSession: Codable {
         guard !paused else { return result }
         var i = index
         var t = end
-        while ProbePlan.steps[i].seconds != nil && i + 1 < ProbePlan.steps.count {
+        while steps[i].seconds != nil && i + 1 < steps.count {
             i += 1
-            let duration = ProbePlan.steps[i].seconds ?? 0
+            let duration = steps[i].seconds ?? 0
             result.append(Segment(index: i, start: t, end: t.addingTimeInterval(duration)))
             t = t.addingTimeInterval(duration)
         }
@@ -66,23 +69,32 @@ struct ProbeSession: Codable {
     }
 
     func state(_ segment: Segment, next: Segment?) -> ProbeAttributes.ContentState {
-        let s = ProbePlan.steps[segment.index]
-        let following = segment.index + 1 < ProbePlan.steps.count ? ProbePlan.steps[segment.index + 1] : nil
+        let s = steps[segment.index]
+        let following = segment.index + 1 < steps.count ? steps[segment.index + 1] : nil
         let isCurrent = segment.index == index
         return .init(
             title: s.title, detail: s.detail,
             start: segment.start, end: max(segment.start, segment.end),
             paused: isCurrent && paused, remaining: isCurrent ? remaining : (s.seconds ?? 0),
             repetitions: s.seconds == nil,
-            step: segment.index + 1, stepCount: ProbePlan.steps.count,
+            step: segment.index + 1, stepCount: steps.count,
             nextTitle: following?.title ?? "完了で終了", nextDetail: following?.detail ?? "",
             nextStart: next?.start, nextEnd: next?.end,
             nextRepetitions: following?.seconds == nil)
     }
 
+    /// Rows for mode C: every step that follows on its own, each with its scheduled interval.
+    func timeline(_ segments: [Segment]) -> [ProbeAttributes.Row] {
+        segments.prefix(4).map { segment in
+            let s = steps[segment.index]
+            return .init(title: s.title, detail: s.detail, start: segment.start,
+                         end: max(segment.start, segment.end), repetitions: s.seconds == nil)
+        }
+    }
+
     var summary: String {
         let timing = step.seconds == nil ? "完了待ち" : (paused ? "停止中 残り\(Int(ceil(remaining)))秒" : "残り\(Int(ceil(max(0, end.timeIntervalSinceNow))))秒")
-        return "[\(mode.rawValue)] \(index + 1)/\(ProbePlan.steps.count) \(step.title) \(timing)"
+        return "[\(mode.rawValue)/\(plan.rawValue)] \(index + 1)/\(steps.count) \(step.title) \(timing)"
     }
 }
 
@@ -117,13 +129,16 @@ enum ProbeEngine {
     static let prefix = "probe."
     static let countdownSound = UNNotificationSoundName("countdown5.wav")
 
-    static func start(mode: ProbeMode) async throws {
+    /// Activities that have not been ended. Includes ones scheduled for later (pending).
+    static let maxActivities = 5
+
+    static func start(mode: ProbeMode, plan: ProbePlan) async throws {
         await stop(reason: nil)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             throw NSError(domain: "Probe", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "設定でライブアクティビティを許可してください"])
         }
-        try await publish(ProbeSession(mode: mode), reason: "開始")
+        try await publish(ProbeSession(mode: mode, plan: plan), reason: "開始")
     }
 
     static func publish(_ session: ProbeSession, reason: String) async throws {
@@ -134,6 +149,7 @@ enum ProbeEngine {
         switch session.mode {
         case .single: try await publishSingle(session, segments)
         case .scheduled: try await publishScheduled(session, segments)
+        case .timeline: try await publishSingle(session, segments)
         }
         ProbeLog.add("\(reason): \(session.summary)")
     }
@@ -157,7 +173,7 @@ enum ProbeEngine {
         case .next:
             if session.step.seconds == nil { session.completed += 1 }
             else if !session.step.rest { session.skipped += 1 }
-            guard session.index + 1 < ProbePlan.steps.count else {
+            guard session.index + 1 < session.steps.count else {
                 await stop(reason: "\(source)操作: 完了で終了（完了\(session.completed) スキップ\(session.skipped)）")
                 return
             }
@@ -194,7 +210,7 @@ enum ProbeEngine {
     private static func scheduleNotifications(_ session: ProbeSession, _ segments: [ProbeSession.Segment]) async {
         guard !session.paused else { return }
         for segment in segments.dropFirst() {
-            let step = ProbePlan.steps[segment.index]
+            let step = session.steps[segment.index]
             let countdownAt = segment.start.addingTimeInterval(-5).timeIntervalSinceNow
             if countdownAt > 0.5 {
                 let content = UNMutableNotificationContent()
@@ -204,7 +220,7 @@ enum ProbeEngine {
                 await add("\(prefix)cd.\(segment.index)", content, after: countdownAt)
             }
             // Mode B announces each boundary with the scheduled Live Activity's own alert.
-            if session.mode == .single {
+            if session.mode != .scheduled {
                 let at = segment.start.timeIntervalSinceNow
                 guard at > 0.5 else { continue }
                 let content = UNMutableNotificationContent()
@@ -230,21 +246,23 @@ enum ProbeEngine {
     private static func staleDate(_ session: ProbeSession, _ segment: ProbeSession.Segment) -> Date? {
         let isCurrent = segment.index == session.index
         if isCurrent && session.paused { return nil }
-        return ProbePlan.steps[segment.index].seconds == nil ? nil : segment.end
+        return session.steps[segment.index].seconds == nil ? nil : segment.end
     }
 
-    /// Mode A: a single activity. The app updates it whenever it runs; between updates the widget
-    /// can switch once to the look-ahead step when the content goes stale.
+    /// Modes A and C: a single activity. The app updates it whenever it runs. Between updates,
+    /// A relies on the stale date (one switch at most) and C on per-row system timers.
     private static func publishSingle(_ session: ProbeSession, _ segments: [ProbeSession.Segment]) async throws {
         let current = segments[0]
-        let content = ActivityContent(state: session.state(current, next: segments.dropFirst().first),
-                                      staleDate: staleDate(session, current))
+        var state = session.state(current, next: segments.dropFirst().first)
+        if session.mode == .timeline && !session.paused { state.timeline = session.timeline(segments) }
+        let content = ActivityContent(state: state,
+                                      staleDate: session.mode == .single ? staleDate(session, current) : nil)
         let live = Activity<ProbeAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale }
         if let activity = live.first {
             await activity.update(content)
             for extra in live.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
         } else {
-            _ = try Activity.request(attributes: ProbeAttributes(name: "A", mode: ProbeMode.single.rawValue),
+            _ = try Activity.request(attributes: ProbeAttributes(name: session.mode == .single ? "A" : "C", mode: session.mode.rawValue),
                                      content: content, pushType: nil)
         }
     }
@@ -256,7 +274,8 @@ enum ProbeEngine {
         for activity in Activity<ProbeAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
-        for (k, segment) in segments.enumerated() {
+        // The system rejects requests beyond its per-app limit (5 seen on iOS 26.6.2), pending ones included.
+        for (k, segment) in segments.prefix(maxActivities).enumerated() {
             let next = k + 1 < segments.count ? segments[k + 1] : nil
             let content = ActivityContent(state: session.state(segment, next: next),
                                           staleDate: staleDate(session, segment),
@@ -270,7 +289,7 @@ enum ProbeEngine {
                 ProbeLog.add("予約LAはiOS 26以降のみ")
                 break
             }
-            let step = ProbePlan.steps[segment.index]
+            let step = session.steps[segment.index]
             let alert = AlertConfiguration(title: "\(step.title)", body: "\(step.detail)", sound: .default)
             do {
                 _ = try Activity.request(attributes: attributes, content: content, pushType: nil,

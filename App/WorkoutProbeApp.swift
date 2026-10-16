@@ -1,3 +1,4 @@
+import ActivityKit
 import SwiftUI
 import Combine
 import UIKit
@@ -11,8 +12,50 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    // Records every process launch, including background launches (e.g. by a Live Activity
+    // button), and whether the system starts the app when a scheduled Live Activity begins.
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        let state: String
+        switch application.applicationState {
+        case .active: state = "前面"
+        case .inactive: state = "準備中"
+        case .background: state = "バックグラウンド"
+        @unknown default: state = "不明"
+        }
+        ProbeLog.add("アプリ起動（\(state)）")
+        ActivityObserver.start()
+        return true
+    }
+}
+
+/// Logs Live Activity state changes while the process is alive.
+enum ActivityObserver {
+    private static var started = false
+    static func start() {
+        guard !started else { return }
+        started = true
+        Task {
+            for activity in Activity<ProbeAttributes>.activities { watch(activity) }
+            for await activity in Activity<ProbeAttributes>.activityUpdates {
+                ProbeLog.add("LA追加 \(activity.attributes.name)=\(activity.activityState)")
+                watch(activity)
+            }
+        }
+    }
+    private static func watch(_ activity: Activity<ProbeAttributes>) {
+        Task {
+            for await state in activity.activityStateUpdates {
+                ProbeLog.add("LA状態 \(activity.attributes.name)→\(state)")
+            }
+        }
+    }
+}
+
 @main
 struct WorkoutProbeApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let delegate = NotificationDelegate()
     init() { UNUserNotificationCenter.current().delegate = delegate }
     var body: some Scene { WindowGroup { ProbeView() } }
@@ -21,7 +64,8 @@ struct WorkoutProbeApp: App {
 struct ProbeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var session = ProbeSession.load()
-    @State private var mode: ProbeMode = .single
+    @State private var mode: ProbeMode = .scheduled
+    @State private var plan: ProbePlan = .mixed
     @State private var log = ProbeLog.lines
     @State private var message = "通知が届くことと、上部・ロック画面の表示が自動で切り替わることは別に判定します。"
     @State private var busy = false
@@ -30,13 +74,13 @@ struct ProbeView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("予定") {
-                    Text(ProbePlan.steps.map { "\($0.title)\($0.detail)" }.joined(separator: " → "))
+                Section("予定（\(session?.plan.label ?? plan.label)）") {
+                    Text((session?.steps ?? plan.steps).map { "\($0.title)\($0.detail)" }.joined(separator: " → "))
                         .font(.footnote)
                 }
                 if let session {
                     Section("進行中 \(session.mode.label)") {
-                        Text("\(session.index + 1)/\(ProbePlan.steps.count)  \(session.step.title)")
+                        Text("\(session.index + 1)/\(session.steps.count)  \(session.step.title)")
                             .font(.title.bold())
                         if session.step.seconds == nil {
                             Text("\(session.step.detail)・完了操作待ち").font(.title2)
@@ -60,11 +104,15 @@ struct ProbeView: View {
                             ForEach(ProbeMode.allCases) { Text($0.label).tag($0) }
                         }
                         .pickerStyle(.segmented)
+                        Picker("予定", selection: $plan) {
+                            ForEach(ProbePlan.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
                         Button("通知許可を確認して検証開始") {
                             run {
                                 let allowed = try await UNUserNotificationCenter.current()
                                     .requestAuthorization(options: [.alert, .sound])
-                                try await ProbeEngine.start(mode: mode)
+                                try await ProbeEngine.start(mode: mode, plan: plan)
                                 message = allowed ? "開始しました。すぐYouTubeかロック画面へ切り替えてください。" : "通知は不許可です。設定を確認してください。"
                             }
                         }
