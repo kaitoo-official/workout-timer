@@ -1,6 +1,6 @@
-# Codemagic workflows for the iOS background probe. Both are started manually (no triggers).
-# Pocket Base settings are only referenced (shared App Store Connect integration and the
-# signing-key group); nothing here changes Pocket Base.
+# Codemagic workflows for the iOS background probe. All are started manually (no triggers).
+# Pocket Base settings are only referenced (the shared App Store Connect API key);
+# nothing here changes Pocket Base's identifiers, certificate or profiles.
 workflows:
   compile-probe:
     name: Compile iOS probe (no signing or upload)
@@ -30,6 +30,19 @@ workflows:
       - build/Build/Products/Release-iphoneos/*.app
       - /tmp/compile.log
 
+  setup-signing:
+    name: One-time signing setup (bundle IDs and App Store profiles)
+    instance_type: mac_mini_m2
+    max_build_duration: 10
+    integrations:
+      app_store_connect: pocket-base-asc
+    environment:
+      vars:
+        PROBE_BUNDLE_ID: com.kaitooofficial.workoutprobe
+    scripts:
+      - name: Register probe identifiers and create profiles (never deletes or revokes)
+        script: python3 scripts/setup_signing.py "$PROBE_BUNDLE_ID"
+
   signed-probe:
     name: Signed probe to App Store Connect (internal TestFlight only)
     instance_type: mac_mini_m2
@@ -38,9 +51,11 @@ workflows:
       app_store_connect: pocket-base-asc
     environment:
       xcode: 26.6
-      groups:
-        # CERTIFICATE_PRIVATE_KEY for the existing distribution certificate (read only)
-        - ios_signing
+      # Certificate "workout-probe-distribution" and the probe profiles are stored in
+      # Codemagic Code signing identities; this fetches those for the app and its extensions.
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.kaitooofficial.workoutprobe
       vars:
         PROBE_BUNDLE_ID: com.kaitooofficial.workoutprobe
     scripts:
@@ -53,20 +68,12 @@ workflows:
           xcodebuild -version
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen generate
-      - name: Fetch signing for app and extension
-        script: |
-          set -euo pipefail
-          keychain initialize
-          # --create also registers the bundle identifiers if they do not exist yet.
-          app-store-connect fetch-signing-files "$PROBE_BUNDLE_ID" --type IOS_APP_STORE --create
-          app-store-connect fetch-signing-files "$PROBE_BUNDLE_ID.activity" --type IOS_APP_STORE --create
-          keychain add-certificates
-          xcode-project use-profiles
+      - name: Apply profiles to the project
+        script: xcode-project use-profiles
       - name: Build signed archive
         script: |
           set -euo pipefail
-          xcode-project build-ipa --project WorkoutProbe.xcodeproj --scheme WorkoutProbe \
-            --archive-xcargs "CURRENT_PROJECT_VERSION=$BUILD_NUMBER COMPILER_INDEX_STORE_ENABLE=NO"
+          xcode-project build-ipa --project WorkoutProbe.xcodeproj --scheme WorkoutProbe             --archive-xcargs "CURRENT_PROJECT_VERSION=$BUILD_NUMBER COMPILER_INDEX_STORE_ENABLE=NO"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
