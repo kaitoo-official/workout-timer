@@ -1,0 +1,69 @@
+workflows:
+  compile-probe:
+    name: Compile iOS probe (no signing or upload)
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: 26.6
+      vars:
+        PROBE_BUNDLE_ID: com.example.workoutprobe
+    scripts:
+      - name: Generate project and record toolchain
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen --version
+          xcodegen generate
+      - name: Compile app and extension
+        script: |
+          set -euo pipefail
+          xcodebuild -project WorkoutProbe.xcodeproj -scheme WorkoutProbe \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            PROBE_BUNDLE_ID=com.example.workoutprobe CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath build build
+    artifacts:
+      - build/Build/Products/Release-iphoneos/*.app
+
+  signed-probe:
+    name: Signed probe (manual setup required)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    integrations:
+      app_store_connect: pocket-base-asc
+    environment:
+      xcode: 26.6
+      groups:
+        - ios_signing
+        - workout_probe
+    scripts:
+      - name: Validate separate app identifier
+        script: |
+          set -euo pipefail
+          : "${PROBE_BUNDLE_ID:?Set a NEW app identifier in workout_probe}"
+          if [[ "$PROBE_BUNDLE_ID" == com.kaitooofficial.pocketbase* || "$PROBE_BUNDLE_ID" == com.example.* ]]; then
+            echo 'Use a separate registered identifier for this probe.'; exit 1
+          fi
+          xcodebuild -version
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate
+      - name: Fetch signing for app and extension
+        script: |
+          set -euo pipefail
+          keychain initialize
+          app-store-connect fetch-signing-files "$PROBE_BUNDLE_ID" --type IOS_APP_STORE --create
+          app-store-connect fetch-signing-files "$PROBE_BUNDLE_ID.activity" --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Build signed archive
+        script: |
+          set -euo pipefail
+          xcode-project build-ipa --project WorkoutProbe.xcodeproj --scheme WorkoutProbe \
+            --archive-xcargs "PROBE_BUNDLE_ID=$PROBE_BUNDLE_ID CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
