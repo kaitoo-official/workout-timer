@@ -28,6 +28,7 @@ targets:
         NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
         # No custom encryption: skips the export-compliance question for each TestFlight build.
         ITSAppUsesNonExemptEncryption: false
     dependencies:
