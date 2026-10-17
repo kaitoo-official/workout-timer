@@ -96,8 +96,11 @@ private struct TimelineDisplay: View {
                     } else {
                         ProgressView(timerInterval: row.start...row.end, countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
                             .tint(.orange).frame(width: 60)
-                        Text(timerInterval: row.start...row.end, countsDown: true)
-                            .monospacedDigit().font(.subheadline).frame(width: 44, alignment: .trailing)
+                        // A timer whose interval starts in the future stays frozen on device, so every
+                        // row counts down to its own end from the first row's start (already passed).
+                        // The current step's row therefore shows its true remaining time.
+                        Text(timerInterval: state.timeline[0].start...row.end, countsDown: true)
+                            .monospacedDigit().font(.subheadline).frame(width: 48, alignment: .trailing)
                     }
                 }
             }

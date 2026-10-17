@@ -47,7 +47,13 @@ enum ActivityObserver {
     private static func watch(_ activity: Activity<ProbeAttributes>) {
         Task {
             for await state in activity.activityStateUpdates {
-                ProbeLog.add("LA状態 \(activity.attributes.name)→\(state)")
+                let background = await MainActor.run { UIApplication.shared.applicationState == .background }
+                ProbeLog.add("LA状態 \(activity.attributes.name)→\(state)\(background ? "（裏）" : "")")
+                guard state == .active, activity.attributes.mode == ProbeMode.scheduled.rawValue else { continue }
+                // Ask for a little extra time so the refresh can finish if the system woke us for this.
+                let task = await MainActor.run { UIApplication.shared.beginBackgroundTask(withName: "probe-refresh") }
+                await ProbeEngine.refreshScheduled(trigger: "\(activity.attributes.name)開始\(background ? "・裏" : "")")
+                await MainActor.run { UIApplication.shared.endBackgroundTask(task) }
             }
         }
     }

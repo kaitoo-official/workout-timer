@@ -101,7 +101,10 @@ struct ProbeSession: Codable {
 enum ProbeLog {
     static let key = "probe.log.v1"
     static var lines: [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+    private static let lock = NSLock()
     static func add(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.S"
         var all = lines
@@ -271,33 +274,78 @@ enum ProbeEngine {
     /// activity per following automatic step. The system starts each at its date even when
     /// the app is not running. Count/limit failures are logged, not hidden.
     private static func publishScheduled(_ session: ProbeSession, _ segments: [ProbeSession.Segment]) async throws {
+        busy = true
+        defer { busy = false }
         for activity in Activity<ProbeAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         // The system rejects requests beyond its per-app limit (5 seen on iOS 26.6.2), pending ones included.
         for (k, segment) in segments.prefix(maxActivities).enumerated() {
             let next = k + 1 < segments.count ? segments[k + 1] : nil
-            let content = ActivityContent(state: session.state(segment, next: next),
-                                          staleDate: staleDate(session, segment),
-                                          relevanceScore: Double(100 - k))
-            let attributes = ProbeAttributes(name: "B\(segment.index + 1)", mode: ProbeMode.scheduled.rawValue)
-            if k == 0 {
-                _ = try Activity.request(attributes: attributes, content: content, pushType: nil)
-                continue
-            }
-            guard #available(iOS 26.0, *) else {
-                ProbeLog.add("予約LAはiOS 26以降のみ")
-                break
-            }
-            let step = session.steps[segment.index]
-            let alert = AlertConfiguration(title: "\(step.title)", body: "\(step.detail)", sound: .default)
             do {
-                _ = try Activity.request(attributes: attributes, content: content, pushType: nil,
-                                         style: .standard, alertConfiguration: alert, start: segment.start)
+                try requestScheduled(session, segment, next: next)
             } catch {
                 ProbeLog.add("予約LA失敗 \(segment.index + 1)番目（\(k)件予約済み）: \(error.localizedDescription)")
+                if k == 0 { throw error }
                 break
             }
         }
+    }
+
+    /// Set while the foreground rebuilds every activity, so a background refresh does not interleave.
+    private static var busy = false
+
+    private static func requestScheduled(_ session: ProbeSession, _ segment: ProbeSession.Segment,
+                                         next: ProbeSession.Segment?) throws {
+        // Later steps rank higher, so the Dynamic Island shows the step that started most recently.
+        let content = ActivityContent(state: session.state(segment, next: next),
+                                      staleDate: staleDate(session, segment),
+                                      relevanceScore: Double(segment.index + 1))
+        let attributes = ProbeAttributes(name: "B\(segment.index + 1)", mode: ProbeMode.scheduled.rawValue)
+        if segment.index == session.index {
+            _ = try Activity.request(attributes: attributes, content: content, pushType: nil)
+            return
+        }
+        guard #available(iOS 26.0, *) else {
+            throw NSError(domain: "Probe", code: 2, userInfo: [NSLocalizedDescriptionKey: "予約LAはiOS 26以降のみ"])
+        }
+        let step = session.steps[segment.index]
+        let alert = AlertConfiguration(title: "\(step.title)", body: "\(step.detail)", sound: .default)
+        _ = try Activity.request(attributes: attributes, content: content, pushType: nil,
+                                 style: .standard, alertConfiguration: alert, start: segment.start)
+    }
+
+    /// Mode B rolling window. Called whenever a scheduled activity becomes active, including when
+    /// the system gives the app background time for it: ends activities for steps that are over
+    /// and schedules further steps up to the limit. Logged so the device test shows whether it ran.
+    static func refreshScheduled(trigger: String) async {
+        guard !busy, var session = ProbeSession.load(), session.mode == .scheduled, !session.paused else { return }
+        _ = session.reconcile()
+        try? session.save()
+        let currentStep = session.index + 1
+        var kept = Set<Int>()
+        var ended = 0
+        for activity in Activity<ProbeAttributes>.activities {
+            let step = activity.content.state.step
+            if step < currentStep {
+                await activity.end(nil, dismissalPolicy: .immediate)
+                ended += 1
+            } else {
+                kept.insert(step)
+            }
+        }
+        let segments = session.upcoming()
+        var added = 0
+        for (k, segment) in segments.enumerated() where !kept.contains(segment.index + 1) {
+            guard kept.count + added < maxActivities else { break }
+            do {
+                try requestScheduled(session, segment, next: k + 1 < segments.count ? segments[k + 1] : nil)
+                added += 1
+            } catch {
+                ProbeLog.add("補充失敗 \(segment.index + 1)番目: \(error.localizedDescription)")
+                break
+            }
+        }
+        ProbeLog.add("補充（\(trigger)）: \(session.summary) 終了\(ended) 追加\(added) 合計\(kept.count + added)")
     }
 }
