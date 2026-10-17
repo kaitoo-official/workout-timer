@@ -1,5 +1,6 @@
 import ActivityKit
 import Foundation
+import UIKit
 import UserNotifications
 
 struct ProbeSession: Codable {
@@ -279,6 +280,15 @@ enum ProbeEngine {
         for activity in Activity<ProbeAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
+        // Device run 5: from a lock-screen button (app not in the foreground) the system starts an
+        // activity immediately but refuses scheduled ones. In that case show one "block" activity
+        // listing the automatic steps as rows whose bars run on their own (no server needed).
+        let foreground = await MainActor.run { UIApplication.shared.applicationState == .active }
+        if !foreground && !session.paused && segments.count > 1 {
+            try requestBlock(session, segments)
+            ProbeLog.add("ブロック表示（前面でない）：\(segments.prefix(4).map { session.steps[$0.index].title }.joined(separator: "→"))")
+            return
+        }
         // The system rejects requests beyond its per-app limit (5 seen on iOS 26.6.2), pending ones included.
         // One slot stays free so a background refresh can schedule the next step before ending old ones.
         for (k, segment) in segments.prefix(maxActivities - 1).enumerated() {
@@ -288,9 +298,22 @@ enum ProbeEngine {
             } catch {
                 ProbeLog.add("予約LA失敗 \(segment.index + 1)番目（\(k)件予約済み）: \(error.localizedDescription)")
                 if k == 0 { throw error }
+                // Fall back to the block view on the activity already started for the current step.
+                for activity in Activity<ProbeAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
+                try requestBlock(session, segments)
+                ProbeLog.add("ブロック表示に切替（予約失敗のため）")
                 break
             }
         }
+    }
+
+    private static func requestBlock(_ session: ProbeSession, _ segments: [ProbeSession.Segment]) throws {
+        var state = session.state(segments[0], next: segments.dropFirst().first)
+        state.timeline = session.timeline(segments)
+        let attributes = ProbeAttributes(name: "B\(segments[0].index + 1)まとめ", mode: ProbeMode.scheduled.rawValue)
+        _ = try Activity.request(attributes: attributes,
+                                 content: ActivityContent(state: state, staleDate: nil, relevanceScore: 100),
+                                 pushType: nil)
     }
 
     /// Set while the foreground rebuilds every activity, so a background refresh does not interleave.
@@ -325,6 +348,8 @@ enum ProbeEngine {
         func elapsed() -> String { String(format: "%.0fms", Date().timeIntervalSince(t0) * 1000) }
         guard !busy else { ProbeLog.add("補充スキップ（前面で更新中）\(trigger)"); return }
         guard var session = ProbeSession.load(), session.mode == .scheduled, !session.paused else { return }
+        // A block activity covers the following steps itself; ending it would blank the screen.
+        guard !Activity<ProbeAttributes>.activities.contains(where: { !$0.content.state.timeline.isEmpty }) else { return }
         ProbeLog.add("補充開始（\(trigger)）")
         _ = session.reconcile()
         try? session.save()

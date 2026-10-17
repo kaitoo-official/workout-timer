@@ -106,7 +106,8 @@ private struct TimelineDisplay: View {
             }
             HStack {
                 Button(intent: ToggleProbeIntent()) { Text("一時停止") }
-                Button(intent: NextProbeIntent()) { Text(state.repetitions ? "完了" : "スキップ") }
+                // The current row can change without an update, so one label covers both cases.
+                Button(intent: NextProbeIntent()) { Text(state.timeline.count > 1 ? "完了・次へ" : (state.repetitions ? "完了" : "スキップ")) }
             }
             .buttonStyle(.bordered).tint(.orange).font(.caption)
         }
