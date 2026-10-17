@@ -24,6 +24,7 @@
 - ただし裏からの新規予約は「Target is not foreground」で拒否される。予約は最大5件（運用は4件＋1枠空き）なので、サーバーなしで無操作で進めるのは、最後にアプリかボタンを操作した時点から4区間先まで。
 - 方式C：行ごとの ProgressView(timerInterval:) は未来の区間でも自動で進む。未来の区間の Text(timerInterval:) は止まったままになる（ビルド4で表示方法を変更）。
 - 音声（H）：YouTube 再生中も聞こえ、動画の音は小さくなる。消音スイッチONでは鳴らない。
+- ロック画面のボタン（LiveActivityIntent）からは、今の区間の Live Activity をすぐ開始できる。しかし先の区間の予約は「Target is not foreground」で拒否される（ビルド5、5回目）。
 
 ## この版の中身（v2〜v4）
 
