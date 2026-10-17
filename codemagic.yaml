@@ -1,7 +1,25 @@
-# Codemagic workflows for the iOS background probe. All are started manually (no triggers).
+# Codemagic workflows. All are started manually (no triggers).
+# probe-*: the iOS background probe kept for reference (sources in probe/).
+# core-tests: unit tests for the app's progression core (Packages/WorkoutCore).
 # Pocket Base settings are only referenced (the shared App Store Connect API key);
 # nothing here changes Pocket Base's identifiers, certificate or profiles.
 workflows:
+  core-tests:
+    name: WorkoutCore unit tests
+    instance_type: mac_mini_m2
+    max_build_duration: 20
+    environment:
+      xcode: 26.6
+    scripts:
+      - name: Run swift test
+        script: |
+          set -euo pipefail
+          cd Packages/WorkoutCore
+          swift --version
+          swift test 2>&1 | tee /tmp/core-tests.log
+    artifacts:
+      - /tmp/core-tests.log
+
   compile-probe:
     name: Compile iOS probe (no signing or upload)
     instance_type: mac_mini_m2
@@ -18,16 +36,18 @@ workflows:
           xcodebuild -version
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen --version
+          cd probe
           xcodegen generate
       - name: Compile app and extension
         script: |
           set -euo pipefail
+          cd probe
           xcodebuild -project WorkoutProbe.xcodeproj -scheme WorkoutProbe \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build build 2>&1 | tee /tmp/compile.log
           ls build/Build/Products/Release-iphoneos/WorkoutProbe.app/PlugIns
     artifacts:
-      - build/Build/Products/Release-iphoneos/*.app
+      - probe/build/Build/Products/Release-iphoneos/*.app
       - /tmp/compile.log
 
   setup-signing:
@@ -41,7 +61,7 @@ workflows:
         PROBE_BUNDLE_ID: com.kaitooofficial.workoutprobe
     scripts:
       - name: Register probe identifiers and create profiles (never deletes or revokes)
-        script: python3 scripts/setup_signing.py "$PROBE_BUNDLE_ID"
+        script: python3 probe/scripts/setup_signing.py "$PROBE_BUNDLE_ID"
 
   signed-probe:
     name: Signed probe to App Store Connect (internal TestFlight only)
@@ -67,15 +87,17 @@ workflows:
           fi
           xcodebuild -version
           command -v xcodegen >/dev/null || brew install xcodegen
+          cd probe
           xcodegen generate
       - name: Apply profiles to the project
-        script: xcode-project use-profiles
+        script: cd probe && xcode-project use-profiles
       - name: Build signed archive
         script: |
           set -euo pipefail
+          cd probe
           xcode-project build-ipa --project WorkoutProbe.xcodeproj --scheme WorkoutProbe             --archive-xcargs "CURRENT_PROJECT_VERSION=$BUILD_NUMBER COMPILER_INDEX_STORE_ENABLE=NO"
     artifacts:
-      - build/ios/ipa/*.ipa
+      - probe/build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
