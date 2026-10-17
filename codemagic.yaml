@@ -1,9 +1,80 @@
 # Codemagic workflows. All are started manually (no triggers).
 # probe-*: the iOS background probe kept for reference (sources in probe/).
 # core-tests: unit tests for the app's progression core (Packages/WorkoutCore).
+# compile-app / signed-app: the workout-timer app (app/). Until the app name is decided, signed
+# builds reuse the probe identifiers, profiles and App Store Connect record (internal TestFlight).
 # Pocket Base settings are only referenced (the shared App Store Connect API key);
 # nothing here changes Pocket Base's identifiers, certificate or profiles.
 workflows:
+  compile-app:
+    name: App - unit tests and unsigned compile
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: 26.6
+      vars:
+        APP_BUNDLE_ID: com.example.workouttimer
+    scripts:
+      - name: WorkoutCore unit tests
+        script: |
+          set -euo pipefail
+          cd Packages/WorkoutCore
+          swift test 2>&1 | tail -n 5
+      - name: Generate project
+        script: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null || brew install xcodegen
+          cd app
+          xcodegen generate
+      - name: Compile app and extension
+        script: |
+          set -euo pipefail
+          cd app
+          xcodebuild -project WorkoutTimer.xcodeproj -scheme WorkoutTimer             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS'             CODE_SIGNING_ALLOWED=NO -derivedDataPath build build 2>&1 | tee /tmp/compile-app.log | grep -E "error:|warning: .*WorkoutTimer|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Build/Products/Release-iphoneos/WorkoutTimer.app/PlugIns/WorkoutActivity.appex
+    artifacts:
+      - /tmp/compile-app.log
+
+  signed-app:
+    name: App - signed build to App Store Connect (internal TestFlight only)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    integrations:
+      app_store_connect: pocket-base-asc
+    environment:
+      xcode: 26.6
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.kaitooofficial.workoutprobe
+      vars:
+        APP_BUNDLE_ID: com.kaitooofficial.workoutprobe
+    scripts:
+      - name: WorkoutCore unit tests
+        script: |
+          set -euo pipefail
+          cd Packages/WorkoutCore
+          swift test 2>&1 | tail -n 5
+      - name: Generate project and apply profiles
+        script: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null || brew install xcodegen
+          cd app
+          xcodegen generate
+          xcode-project use-profiles
+      - name: Build signed archive
+        script: |
+          set -euo pipefail
+          cd app
+          xcode-project build-ipa --project WorkoutTimer.xcodeproj --scheme WorkoutTimer             --archive-xcargs "CURRENT_PROJECT_VERSION=$((BUILD_NUMBER + 100)) COMPILER_INDEX_STORE_ENABLE=NO"
+    artifacts:
+      - app/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        # Upload only. No beta review / external testing / App Store submission.
+        submit_to_testflight: false
+
   core-tests:
     name: WorkoutCore unit tests
     instance_type: mac_mini_m2

@@ -1,0 +1,67 @@
+# XcodeGen spec for the workout-timer app. Bundle IDs are substituted from the environment at
+# `xcodegen generate` time. Until the app name is decided, internal TestFlight builds reuse the
+# probe identifiers (com.kaitooofficial.workoutprobe / .activity) and its App Store Connect record.
+name: WorkoutTimer
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    iOS: '26.0'
+packages:
+  WorkoutCore:
+    path: ../Packages/WorkoutCore
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: "1.0"
+    TARGETED_DEVICE_FAMILY: '1'
+    CODE_SIGN_STYLE: Automatic
+targets:
+  WorkoutTimer:
+    type: application
+    platform: iOS
+    sources: [App, Shared]
+    dependencies:
+      - package: WorkoutCore
+      - target: WorkoutActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Generated/App-Info.plist
+      properties:
+        CFBundleDisplayName: 筋トレタイマー
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSSupportsLiveActivities: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
+        ITSAppUsesNonExemptEncryption: false
+  WorkoutActivity:
+    type: app-extension
+    platform: iOS
+    sources: [Widget, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ${APP_BUNDLE_ID}.activity
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) WIDGET_EXTENSION
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+    info:
+      path: Generated/Widget-Info.plist
+      properties:
+        CFBundleDisplayName: 筋トレタイマー
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+schemes:
+  WorkoutTimer:
+    build:
+      targets:
+        WorkoutTimer: all
+        WorkoutActivity: all
+    archive:
+      config: Release
