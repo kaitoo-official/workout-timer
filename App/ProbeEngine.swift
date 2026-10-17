@@ -280,7 +280,8 @@ enum ProbeEngine {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         // The system rejects requests beyond its per-app limit (5 seen on iOS 26.6.2), pending ones included.
-        for (k, segment) in segments.prefix(maxActivities).enumerated() {
+        // One slot stays free so a background refresh can schedule the next step before ending old ones.
+        for (k, segment) in segments.prefix(maxActivities - 1).enumerated() {
             let next = k + 1 < segments.count ? segments[k + 1] : nil
             do {
                 try requestScheduled(session, segment, next: next)
@@ -316,36 +317,53 @@ enum ProbeEngine {
     }
 
     /// Mode B rolling window. Called whenever a scheduled activity becomes active, including when
-    /// the system gives the app background time for it: ends activities for steps that are over
-    /// and schedules further steps up to the limit. Logged so the device test shows whether it ran.
+    /// the system gives the app a brief moment of background time for it. Device run 3 showed that
+    /// moment is too short for awaited work, so the order is: schedule the next step first
+    /// (synchronous), then end finished steps. Each step is logged to show how far it got.
     static func refreshScheduled(trigger: String) async {
-        guard !busy, var session = ProbeSession.load(), session.mode == .scheduled, !session.paused else { return }
+        let t0 = Date()
+        func elapsed() -> String { String(format: "%.0fms", Date().timeIntervalSince(t0) * 1000) }
+        guard !busy else { ProbeLog.add("補充スキップ（前面で更新中）\(trigger)"); return }
+        guard var session = ProbeSession.load(), session.mode == .scheduled, !session.paused else { return }
+        ProbeLog.add("補充開始（\(trigger)）")
         _ = session.reconcile()
         try? session.save()
         let currentStep = session.index + 1
-        var kept = Set<Int>()
-        var ended = 0
-        for activity in Activity<ProbeAttributes>.activities {
-            let step = activity.content.state.step
-            if step < currentStep {
-                await activity.end(nil, dismissalPolicy: .immediate)
-                ended += 1
-            } else {
-                kept.insert(step)
-            }
-        }
+        let activities = Activity<ProbeAttributes>.activities
+        let old = activities.filter { $0.content.state.step < currentStep }
+        var kept = Set(activities.filter { $0.content.state.step >= currentStep }.map { $0.content.state.step })
         let segments = session.upcoming()
-        var added = 0
+        var added: [Int] = []
         for (k, segment) in segments.enumerated() where !kept.contains(segment.index + 1) {
-            guard kept.count + added < maxActivities else { break }
+            // First pass: use the one free slot for the most urgent missing step, before ending anything.
+            guard kept.count + old.count < maxActivities, added.isEmpty else { break }
             do {
                 try requestScheduled(session, segment, next: k + 1 < segments.count ? segments[k + 1] : nil)
-                added += 1
+                kept.insert(segment.index + 1)
+                added.append(segment.index + 1)
+                ProbeLog.add("補充：B\(segment.index + 1)を予約 \(elapsed())")
             } catch {
-                ProbeLog.add("補充失敗 \(segment.index + 1)番目: \(error.localizedDescription)")
+                ProbeLog.add("補充失敗 B\(segment.index + 1): \(error.localizedDescription) \(elapsed())")
                 break
             }
         }
-        ProbeLog.add("補充（\(trigger)）: \(session.summary) 終了\(ended) 追加\(added) 合計\(kept.count + added)")
+        for activity in old {
+            await activity.end(nil, dismissalPolicy: .immediate)
+            ProbeLog.add("補充：\(activity.attributes.name)を終了 \(elapsed())")
+        }
+        // Old ones are gone now; fill the remaining slots (still keeping one free).
+        for (k, segment) in segments.enumerated() where !kept.contains(segment.index + 1) {
+            guard kept.count < maxActivities - 1 else { break }
+            do {
+                try requestScheduled(session, segment, next: k + 1 < segments.count ? segments[k + 1] : nil)
+                kept.insert(segment.index + 1)
+                added.append(segment.index + 1)
+                ProbeLog.add("補充：B\(segment.index + 1)を予約 \(elapsed())")
+            } catch {
+                ProbeLog.add("補充失敗 B\(segment.index + 1): \(error.localizedDescription) \(elapsed())")
+                break
+            }
+        }
+        ProbeLog.add("補充完了：\(session.summary) 終了\(old.count) 追加\(added.count) 残\(kept.count) \(elapsed())")
     }
 }
