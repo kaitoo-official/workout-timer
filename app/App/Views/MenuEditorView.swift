@@ -6,6 +6,12 @@ struct MenuEditorView: View {
     @State var menu: WorkoutMenu
     let onSave: (WorkoutMenu) -> Void
     @State private var editingExercise: Exercise?
+    @State private var restWheel: RestWheel?
+
+    private enum RestWheel: String, Identifiable {
+        case betweenExercises, betweenRounds
+        var id: String { rawValue }
+    }
 
     private var issues: [MenuIssue] { menu.validate() }
     private var check: AutoProgressCheck { AutoProgressCheck(menu: menu) }
@@ -18,8 +24,12 @@ struct MenuEditorView: View {
                     NumberRow(title: "周回", value: $menu.rounds, range: MenuLimits.rounds, unit: "周")
                 }
                 Section {
-                    NumberRow(title: "種目の間", value: $menu.restBetweenExercises, range: MenuLimits.rest, step: 5, unit: "秒")
-                    NumberRow(title: "周回の間", value: $menu.restBetweenRounds, range: MenuLimits.rest, step: 5, unit: "秒")
+                    WheelValueRow(title: "種目の間", value: DurationLabel.text(menu.restBetweenExercises, field: .rest)) {
+                        restWheel = .betweenExercises
+                    }
+                    WheelValueRow(title: "周回の間", value: DurationLabel.text(menu.restBetweenRounds, field: .rest)) {
+                        restWheel = .betweenRounds
+                    }
                 } header: {
                     Text("休憩")
                 } footer: {
@@ -85,6 +95,18 @@ struct MenuEditorView: View {
                     .disabled(!issues.isEmpty)
                 }
             }
+            .sheet(item: $restWheel) { wheel in
+                switch wheel {
+                case .betweenExercises:
+                    DurationPickerSheet(title: "種目の間の休憩", field: .rest, initial: menu.restBetweenExercises) {
+                        menu.restBetweenExercises = $0
+                    }
+                case .betweenRounds:
+                    DurationPickerSheet(title: "周回の間の休憩", field: .rest, initial: menu.restBetweenRounds) {
+                        menu.restBetweenRounds = $0
+                    }
+                }
+            }
             .sheet(item: $editingExercise) { exercise in
                 ExerciseEditorView(exercise: exercise, defaultRest: menu.restBetweenExercises) { edited in
                     if let i = menu.exercises.firstIndex(where: { $0.id == edited.id }) {
@@ -141,6 +163,12 @@ struct ExerciseEditorView: View {
     @State private var seconds = 30
     @State private var overridesRest = false
     @State private var rest = 15
+    @State private var wheel: ExerciseWheel?
+
+    private enum ExerciseWheel: String, Identifiable {
+        case reps, time, rest
+        var id: String { rawValue }
+    }
 
     init(exercise: Exercise, defaultRest: Int, onSave: @escaping (Exercise) -> Void) {
         _exercise = State(initialValue: exercise)
@@ -165,15 +193,15 @@ struct ExerciseEditorView: View {
                     }
                     .pickerStyle(.segmented)
                     if isTimed {
-                        NumberRow(title: "時間", value: $seconds, range: MenuLimits.seconds, step: 5, unit: "秒")
+                        WheelValueRow(title: "時間", value: DurationLabel.text(seconds, field: .exercise)) { wheel = .time }
                     } else {
-                        NumberRow(title: "回数", value: $reps, range: MenuLimits.reps, unit: "回")
+                        WheelValueRow(title: "回数", value: "\(reps)回") { wheel = .reps }
                     }
                 }
                 Section {
                     Toggle("この種目の後の休憩を変える", isOn: $overridesRest)
                     if overridesRest {
-                        NumberRow(title: "休憩", value: $rest, range: MenuLimits.rest, step: 5, unit: "秒")
+                        WheelValueRow(title: "休憩", value: DurationLabel.text(rest, field: .rest)) { wheel = .rest }
                     }
                 } footer: {
                     Text("周の最後の種目では、周回の間の休憩が優先されます。")
@@ -181,6 +209,16 @@ struct ExerciseEditorView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .keyboardDoneButton()
+            .sheet(item: $wheel) { target in
+                switch target {
+                case .reps:
+                    RepsPickerSheet(title: "回数", initial: reps) { reps = $0 }
+                case .time:
+                    DurationPickerSheet(title: "時間", field: .exercise, initial: seconds) { seconds = $0 }
+                case .rest:
+                    DurationPickerSheet(title: "この種目の後の休憩", field: .rest, initial: rest) { rest = $0 }
+                }
+            }
             .navigationTitle(exercise.name.isEmpty ? "種目を追加" : "種目を編集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
