@@ -15,13 +15,11 @@ struct MenuEditorView: View {
             Form {
                 Section("メニュー") {
                     TextField("メニュー名", text: $menu.name)
-                    Stepper("周回：\(menu.rounds)周", value: $menu.rounds, in: MenuLimits.rounds)
+                    NumberRow(title: "周回", value: $menu.rounds, range: MenuLimits.rounds, unit: "周")
                 }
                 Section {
-                    Stepper("種目の間：\(Format.duration(menu.restBetweenExercises))",
-                            value: $menu.restBetweenExercises, in: MenuLimits.rest, step: 5)
-                    Stepper("周回の間：\(Format.duration(menu.restBetweenRounds))",
-                            value: $menu.restBetweenRounds, in: MenuLimits.rest, step: 5)
+                    NumberRow(title: "種目の間", value: $menu.restBetweenExercises, range: MenuLimits.rest, step: 5, unit: "秒")
+                    NumberRow(title: "周回の間", value: $menu.restBetweenRounds, range: MenuLimits.rest, step: 5, unit: "秒")
                 } header: {
                     Text("休憩")
                 } footer: {
@@ -72,6 +70,8 @@ struct MenuEditorView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .keyboardDoneButton()
             .navigationTitle("メニュー編集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -165,20 +165,22 @@ struct ExerciseEditorView: View {
                     }
                     .pickerStyle(.segmented)
                     if isTimed {
-                        Stepper("\(Format.duration(seconds))", value: $seconds, in: 5...3600, step: 5)
+                        NumberRow(title: "時間", value: $seconds, range: MenuLimits.seconds, step: 5, unit: "秒")
                     } else {
-                        Stepper("\(reps)回", value: $reps, in: MenuLimits.reps)
+                        NumberRow(title: "回数", value: $reps, range: MenuLimits.reps, unit: "回")
                     }
                 }
                 Section {
                     Toggle("この種目の後の休憩を変える", isOn: $overridesRest)
                     if overridesRest {
-                        Stepper("休憩：\(Format.duration(rest))", value: $rest, in: MenuLimits.rest, step: 5)
+                        NumberRow(title: "休憩", value: $rest, range: MenuLimits.rest, step: 5, unit: "秒")
                     }
                 } footer: {
                     Text("周の最後の種目では、周回の間の休憩が優先されます。")
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .keyboardDoneButton()
             .navigationTitle(exercise.name.isEmpty ? "種目を追加" : "種目を編集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -27,7 +27,17 @@ final class LiveActivityService {
         guard watched.insert(activity.id).inserted else { return }
         Task {
             for await state in activity.activityStateUpdates where state == .active {
-                onActivated?(activity.content.state.firstStep)
+                // The app may only get a moment in the background here (30–75 ms on device), so
+                // end finished steps first, in this task, before anything else.
+                let first = activity.content.state.firstStep
+                var ended = 0
+                for other in Activity<WorkoutActivityAttributes>.activities
+                where other.id != activity.id && other.content.state.lastStep < first {
+                    await other.end(nil, dismissalPolicy: .immediate)
+                    ended += 1
+                }
+                DiagnosticsLog.add("LA開始 区間\(first + 1)：終わった表示を\(ended)件閉じた")
+                onActivated?(first)
             }
         }
     }
@@ -47,6 +57,7 @@ final class LiveActivityService {
     func apply(_ plan: ActivityPlan, session: Session) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             await endAll()
+            DiagnosticsLog.add("LA：ライブアクティビティが許可されていない")
             return
         }
         await endAll()
@@ -55,6 +66,7 @@ final class LiveActivityService {
             return
         case .block(let rows):
             requestBlock(rows, session: session)
+            DiagnosticsLog.add("LA：まとめ表示 \(rows.count)行")
         case .perStep(let entries):
             var succeeded = 0
             for (k, entry) in entries.enumerated() {
@@ -71,6 +83,9 @@ final class LiveActivityService {
             if adjusted != plan, case .block(let rows) = adjusted {
                 await endAll()
                 requestBlock(rows, session: session)
+                DiagnosticsLog.add("LA：予約\(entries.count)件中\(succeeded)件のみ成功 → まとめ表示に切替")
+            } else {
+                DiagnosticsLog.add("LA：区間ごとに\(succeeded)件（\(entries.first.map { "区間\($0.step.index + 1)" } ?? "")から）")
             }
         }
     }

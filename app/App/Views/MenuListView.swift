@@ -5,6 +5,7 @@ struct MenuListView: View {
     @State private var controller = SessionController.shared
     @State private var editing: WorkoutMenu?
     @State private var blocked: WorkoutMenu?
+    @State private var showingDiagnostics = false
 
     var body: some View {
         NavigationStack {
@@ -34,7 +35,11 @@ struct MenuListView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { editing = newMenu() } label: { Label("メニューを追加", systemImage: "plus") }
                 }
+                ToolbarItem(placement: .bottomBar) {
+                    Button("動作記録（テスト用）") { showingDiagnostics = true }.font(.footnote)
+                }
             }
+            .sheet(isPresented: $showingDiagnostics) { DiagnosticsView() }
             .sheet(item: $editing) { menu in
                 MenuEditorView(menu: menu) { controller.upsert($0) }
             }

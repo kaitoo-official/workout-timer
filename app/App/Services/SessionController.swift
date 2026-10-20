@@ -91,6 +91,7 @@ final class SessionController {
         _ = await notifications.requestAuthorization()
         session = Session(menu: menu, at: Date())
         saveSession()
+        DiagnosticsLog.add("開始：\(menu.name)")
         await sync()
     }
 
@@ -100,7 +101,11 @@ final class SessionController {
         guard var s = session else { return .finished }
         let before = s.stepIndex
         let rejection = s.apply(action, target: target, at: Date())
-        guard rejection == nil else { return rejection }
+        guard rejection == nil else {
+            DiagnosticsLog.add("操作 \(action.rawValue) を無視（\(rejection.map { "\($0)" } ?? "")）")
+            return rejection
+        }
+        DiagnosticsLog.add("操作 \(action.rawValue) → 区間\(s.stepIndex + 1) \(s.currentStep?.title ?? "終了")")
         session = s
         saveSession()
         if s.stepIndex != before || s.isFinished { Haptics.step(enabled: settings.haptics) }
@@ -109,6 +114,8 @@ final class SessionController {
     }
 
     func handleIntent(_ action: WorkoutIntentAction, first: Int, last: Int) async {
+        let state = UIApplication.shared.applicationState == .active ? "前面" : "裏"
+        DiagnosticsLog.add("ロック画面ボタン \(action.rawValue)（区間\(first + 1)〜\(last + 1)、アプリ\(state)）")
         let target: Session.Target = first <= last ? .range(first...last) : .any
         switch action {
         case .next: await perform(.next, target: target)
@@ -128,7 +135,8 @@ final class SessionController {
         session = s
         saveSession()
         if s.stepIndex != before { Haptics.step(enabled: settings.haptics) }
-        await sync()
+        DiagnosticsLog.add("時間で進行：区間\(s.stepIndex + 1) \(s.currentStep?.title ?? "終了")")
+        await sync(timeOnly: true)
     }
 
     /// The app became active again: catch up with the time that passed.
@@ -137,13 +145,13 @@ final class SessionController {
         s.advance(to: Date())
         session = s
         saveSession()
-        await sync()
+        DiagnosticsLog.add("アプリ復帰：区間\(s.stepIndex + 1) \(s.currentStep?.title ?? "終了")")
+        await sync(timeOnly: true)
     }
 
     /// A scheduled Live Activity started (the app may only have a moment in the background).
     /// Ending finished steps worked on device; new requests are refused there, so none are made.
     private func scheduledStepBegan(_ step: Int) async {
-        await activities.endActivities(before: step)
         guard var s = session, !s.isFinished else { return }
         if s.advance(to: Date()) {
             session = s
@@ -170,13 +178,14 @@ final class SessionController {
 
     /// Rebuilds notifications and Live Activities from the session state alone, so the three never
     /// disagree. Called after every change.
-    private func sync() async {
+    private func sync(timeOnly: Bool = false) async {
         guard let s = session, !s.isFinished else {
             await notifications.clearAll()
             await activities.endAll()
             return
         }
-        await notifications.replace(with: NotificationPlan.make(for: s, at: Date(), settings: settings))
+        await notifications.replace(with: NotificationPlan.make(for: s, at: Date(), settings: settings),
+                                    keepImminent: timeOnly)
         let foreground = UIApplication.shared.applicationState == .active
         await activities.apply(ActivityPlan.make(for: s, foreground: foreground), session: s)
     }

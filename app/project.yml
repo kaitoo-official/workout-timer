@@ -4,6 +4,7 @@
 name: WorkoutTimer
 options:
   minimumXcodeGenVersion: 2.42.0
+  developmentLanguage: ja
   deploymentTarget:
     iOS: '26.0'
 packages:
@@ -34,6 +35,9 @@ targets:
         CFBundleDisplayName: 筋トレタイマー
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
+        # Japanese system labels (Edit / Delete buttons etc.).
+        CFBundleDevelopmentRegion: ja
+        CFBundleLocalizations: [ja]
         NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
